@@ -1,19 +1,3 @@
-/*
-*  Video Lecture: 22
-*  Programmer: Arif Butt
-*  Course: System Programming with Linux
-*  myshellv1.c: 
-*  main() displays a prompt, receives a string from keyboard, pass it to tokenize()
-*  tokenize() allocates dynamic memory and tokenize the string and return a char**
-*  main() then pass the tokenized string to execute() which calls fork and exec
-*  finally main() again displays the prompt and waits for next command string
-*   Limitations:
-*   if user press enter without any input the program gives sigsegv 
-*   if user give only spaces and press enter it gives sigsegv
-*   if user press ctrl+D it give sigsegv
-*   however if you give spaces and give a cmd and press enter it works
-*/
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -24,7 +8,7 @@
 #define MAX_LEN 512
 #define MAXARGS 10
 #define ARGLEN 30
-#define PROMPT "PUCITshell:- "
+#define PROMPT "MUSAshell:- "
 
 int execute(char* arglist[]);
 char** tokenize(char* cmdline);
