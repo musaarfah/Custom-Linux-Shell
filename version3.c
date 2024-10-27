@@ -175,32 +175,70 @@ int handle_redirection(char** arglist) {
 }
 
 int handle_pipe(char* cmdline) {
+    // Split the command based on the pipe '|'
     char* commands[2];
     char* token = strtok(cmdline, "|");
     int index = 0;
 
+    // Tokenize the input based on '|'
     while (token != NULL && index < 2) {
         commands[index++] = token;
         token = strtok(NULL, "|");
     }
 
-    int pipefd[2];
-    pipe(pipefd);
-    if (fork() == 0) {
-        dup2(pipefd[1], STDOUT_FILENO);
-        close(pipefd[0]);
-        close(pipefd[1]);
-        char** arglist = tokenize(commands[0]);
-        execute(arglist, 0);
-        exit(0);
-    } else {
-        dup2(pipefd[0], STDIN_FILENO);
-        close(pipefd[1]);
-        close(pipefd[0]);
-        char** arglist = tokenize(commands[1]);
-        execute(arglist, 0);
-        wait(NULL);
+    // Check if there are exactly two commands for the pipe
+    if (index != 2) {
+        fprintf(stderr, "Invalid pipe command\n");
+        return -1;
     }
+
+    // Create a pipe
+    int pipefd[2];
+    if (pipe(pipefd) == -1) {
+        perror("pipe failed");
+        exit(1);
+    }
+
+    // First child process for the command before the pipe
+    pid_t pid1 = fork();
+    if (pid1 == 0) {
+        // Child process 1
+        dup2(pipefd[1], STDOUT_FILENO); // Redirect stdout to the pipe
+        close(pipefd[0]); // Close unused read end of the pipe
+        close(pipefd[1]);
+
+        // Tokenize and execute the first command
+        char** arglist1 = tokenize(commands[0]);
+        if (arglist1 != NULL) {
+            execvp(arglist1[0], arglist1);
+            perror("Command not found...");
+            exit(1);
+        }
+    }
+
+    // Second child process for the command after the pipe
+    pid_t pid2 = fork();
+    if (pid2 == 0) {
+        // Child process 2
+        dup2(pipefd[0], STDIN_FILENO); // Redirect stdin from the pipe
+        close(pipefd[1]); // Close unused write end of the pipe
+        close(pipefd[0]);
+
+        // Tokenize and execute the second command
+        char** arglist2 = tokenize(commands[1]);
+        if (arglist2 != NULL) {
+            execvp(arglist2[0], arglist2);
+            perror("Command not found...");
+            exit(1);
+        }
+    }
+
+    // Parent process closes pipe ends and waits for children
+    close(pipefd[0]);
+    close(pipefd[1]);
+    waitpid(pid1, NULL, 0);
+    waitpid(pid2, NULL, 0);
+
     return 0;
 }
 

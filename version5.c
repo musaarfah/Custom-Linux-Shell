@@ -1,4 +1,4 @@
-#include <ctype.h>  // For isdigit and isspace()
+#include <ctype.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,12 +7,14 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <errno.h>
 
 #define MAX_LEN 512
 #define MAXARGS 10
 #define ARGLEN 30
 #define PROMPT "MUSAshell:- "
 #define HISTORY_SIZE 10
+#define MAX_JOBS 10
 
 int execute(char* arglist[], int background);
 char** tokenize(char* cmdline);
@@ -22,14 +24,25 @@ int handle_pipe(char* cmdline);
 void handle_sigchld(int sig);
 void trim_whitespace(char* str);
 void add_to_history(char* command);
-char* get_history_command(int index);
+int execute_builtin(char** arglist);
+void list_jobs();
+void remove_job(pid_t pid);
+void add_job(pid_t pid, char* command);
 
-// Global variables for command history
+// Structure to keep track of background jobs
+typedef struct {
+    pid_t pid;
+    char command[MAX_LEN];
+} Job;
+
+// Global variables for command history and jobs
 char* history[HISTORY_SIZE];
 int history_count = 0;
+Job jobs[MAX_JOBS];
+int job_count = 0;
 
 int main() {
-    // Initialize history
+    // Initialize history and jobs
     for (int i = 0; i < HISTORY_SIZE; i++) {
         history[i] = NULL;
     }
@@ -80,7 +93,10 @@ int main() {
             handle_pipe(cmdline);
         } else {
             if ((arglist = tokenize(cmdline)) != NULL) {
-                execute(arglist, background);
+                // Check if the command is a built-in command
+                if (execute_builtin(arglist) == 0) {
+                    execute(arglist, background);
+                }
                 // Free memory for arglist
                 for (int j = 0; j < MAXARGS+1; j++)
                     free(arglist[j]);
@@ -113,8 +129,9 @@ int execute(char* arglist[], int background) {
                 waitpid(cpid, &status, 0);
                 printf("child exited with status %d \n", status >> 8);
             } else {
-                // If running in the background, print the process ID and do not wait
+                // If running in the background, print the process ID and add it to jobs
                 printf("[Background process started with PID %d]\n", cpid);
+                add_job(cpid, arglist[0]);
             }
             return 0;
     }
@@ -192,6 +209,7 @@ int handle_redirection(char** arglist) {
     }
     return 0;
 }
+
 int handle_pipe(char* cmdline) {
     // Split the command based on the pipe '|'
     char* commands[2];
@@ -260,31 +278,15 @@ int handle_pipe(char* cmdline) {
     return 0;
 }
 
-  
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 void handle_sigchld(int sig) {
-    // Wait for all dead child processes without blocking
-    while (waitpid(-1, NULL, WNOHANG) > 0);
+    int saved_errno = errno;
+    while (waitpid(-1, NULL, WNOHANG) > 0) {
+        // Remove completed background processes from jobs
+        remove_job(waitpid(-1, NULL, WNOHANG));
+    }
+    errno = saved_errno;
 }
 
-// Function to add a command to history
 void add_to_history(char* command) {
     if (history_count < HISTORY_SIZE) {
         history[history_count] = strdup(command);
@@ -299,19 +301,85 @@ void add_to_history(char* command) {
     }
 }
 
-// Function to trim whitespace from both ends of a string
 void trim_whitespace(char* str) {
-    // Trim leading whitespace
     while (isspace((unsigned char)*str)) str++;
-
-    // If all spaces (empty string)
     if (*str == 0) return;
-
-    // Trim trailing whitespace
     char* end = str + strlen(str) - 1;
     while (end > str && isspace((unsigned char)*end)) end--;
-
-    // Write new null terminator
     *(end + 1) = '\0';
+}
+
+int execute_builtin(char** arglist) {
+    if (strcmp(arglist[0], "cd") == 0) {
+        if (arglist[1] != NULL) {
+            if (chdir(arglist[1]) != 0) {
+                perror("cd failed");
+            }
+        } else {
+            fprintf(stderr, "cd: missing argument\n");
+        }
+        return 1;
+    }
+    if (strcmp(arglist[0], "exit") == 0) {
+        printf("Exiting shell...\n");
+        exit(0);
+    }
+    if (strcmp(arglist[0], "jobs") == 0) {
+        list_jobs();
+        return 1;
+    }
+    if (strcmp(arglist[0], "kill") == 0) {
+        if (arglist[1] != NULL) {
+            pid_t pid = atoi(arglist[1]);
+            if (kill(pid, SIGKILL) == 0) {
+                printf("Process %d killed.\n", pid);
+            } else {
+                perror("Failed to kill process");
+            }
+        } else {
+            fprintf(stderr, "kill: missing PID\n");
+        }
+        return 1;
+    }
+    if (strcmp(arglist[0], "help") == 0) {
+        printf("Available built-in commands:\n");
+        printf("cd <directory> - Change the working directory.\n");
+        printf("exit - Terminate the shell.\n");
+        printf("jobs - List background processes.\n");
+        printf("kill <PID> - Terminate a background process by PID.\n");
+        printf("help - Display this help message.\n");
+        return 1;
+    }
+    return 0; // Not a built-in command
+}
+
+void list_jobs() {
+    printf("Background jobs:\n");
+    for (int i = 0; i < job_count; i++) {
+        printf("[%d] %s (PID: %d)\n", i + 1, jobs[i].command, jobs[i].pid);
+    }
+}
+
+void add_job(pid_t pid, char* command) {
+    if (job_count < MAX_JOBS) {
+        jobs[job_count].pid = pid;
+        strncpy(jobs[job_count].command, command, MAX_LEN);
+        job_count++;
+    } else {
+        printf("Job list is full! Unable to add more background processes.\n");
+    }
+}
+
+void remove_job(pid_t pid) {
+    for (int i = 0; i < job_count; i++) {
+        if (jobs[i].pid == pid) {
+            // Shift remaining jobs down the list
+            for (int j = i; j < job_count - 1; j++) {
+                jobs[j] = jobs[j + 1];
+            }
+            job_count--;
+            break;
+        }
+    }
 }
 
